@@ -19,28 +19,30 @@ document.getElementById('startBtn').addEventListener('click', startAR);
 async function startAR() {
     document.getElementById('startBtn').style.display = 'none';
     
-    // 1. Request Camera Access
+    // 1. Request Sensor Access FIRST (Strict iOS Requirement)
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+        try {
+            const permissionState = await DeviceMotionEvent.requestPermission();
+            if (permissionState !== 'granted') {
+                document.getElementById('ui').innerText = "Sensor permission denied.";
+                return;
+            }
+        } catch (error) {
+            console.error(error);
+            document.getElementById('ui').innerText = "Sensor request failed.";
+            return;
+        }
+    }
+
+    // 2. Request Camera Access SECOND
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
         document.getElementById('cameraFeed').srcObject = stream;
     } catch (err) {
         console.error("Camera access denied or unavailable", err);
-        document.getElementById('ui').innerText = "Camera access required for AR.";
-        return;
     }
 
-    // 2. Request Sensor Access (Required for iOS 13+)
-    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-        try {
-            const permissionState = await DeviceMotionEvent.requestPermission();
-            if (permissionState !== 'granted') throw new Error("Sensor permission denied");
-        } catch (error) {
-            console.error(error);
-            document.getElementById('ui').innerText = "Device orientation permission needed.";
-            return;
-        }
-    }
-
+    // 3. Load Data
     loadTerrainData();
 }
 
@@ -58,16 +60,14 @@ function initThreeJS(meta, dem, lith) {
     scene = new THREE.Scene();
     
     camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 20000);
-    // Simulate standing on the terrain: X, Y (height), Z
-    camera.position.set(0, 100, 0); 
+    // Spawn at 800m elevation so you aren't buried underground (Max HK elevation here is ~565m)
+    camera.position.set(0, 800, 0); 
 
-    // Enable alpha (transparency) so the video feed shows behind the WebGL canvas
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(window.devicePixelRatio);
     document.body.appendChild(renderer.domElement);
 
-    // Link camera to phone gyroscope
     controls = new THREE.DeviceOrientationControls(camera);
 
     const sun = new THREE.DirectionalLight(0xffffff, 1.2);
@@ -92,10 +92,8 @@ function initThreeJS(meta, dem, lith) {
     geometry.setAttribute('color', new THREE.Float32BufferAttribute(vertexColors, 3));
     geometry.computeVertexNormals();
     
-    // Rotate plane so Z is up, matching standard GIS coordinates
     geometry.rotateX(-Math.PI / 2);
 
-    // Make material partially transparent to blend terrain with the real world
     const material = new THREE.MeshStandardMaterial({
         vertexColors: true, roughness: 0.8, side: THREE.DoubleSide,
         transparent: true, opacity: 0.65 
@@ -105,7 +103,7 @@ function initThreeJS(meta, dem, lith) {
     scene.add(terrain);
 
     raycaster = new THREE.Raycaster();
-    centerScreen = new THREE.Vector2(0, 0); // Always raycast from the exact center of the screen
+    centerScreen = new THREE.Vector2(0, 0);
 
     window.addEventListener('resize', onWindowResize);
     animate();
@@ -144,7 +142,7 @@ function updateRaycaster() {
 
 function animate() {
     requestAnimationFrame(animate);
-    controls.update();     // Update camera based on phone sensors
-    updateRaycaster();     // Update UI based on what the crosshair is looking at
+    controls.update();     
+    updateRaycaster();     
     renderer.render(scene, camera);
 }
