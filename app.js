@@ -34,7 +34,7 @@ async function startAR() {
         const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
         document.getElementById('cameraFeed').srcObject = stream;
     } catch (err) {
-        console.error("Camera access denied or unavailable", err);
+        console.error("Camera access denied", err);
     }
 
     loadTerrainData();
@@ -58,12 +58,12 @@ function initThreeJS() {
     scene.fog = new THREE.Fog(0x87CEEB, initialDistance * 0.5, initialDistance);
     camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, initialDistance);
     
-    // Spawn in the middle of the HK grid at 800m height
+    // Spawn in the middle of the HK grid. Height bumped to 1500m to clear all mountains.
     const startCol = Math.floor(globalMeta.cols / 2);
     const startRow = Math.floor(globalMeta.rows / 2);
     const mapCenterX = startCol * globalMeta.resolution;
-    const mapCenterZ = -(startRow * globalMeta.resolution);
-    camera.position.set(mapCenterX, 800, mapCenterZ); 
+    const mapCenterZ = startRow * globalMeta.resolution; // Strictly positive Z-axis now
+    camera.position.set(mapCenterX, 1500, mapCenterZ); 
 
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
@@ -73,20 +73,19 @@ function initThreeJS() {
     controls = new THREE.DeviceOrientationControls(camera);
 
     const sun = new THREE.DirectionalLight(0xffffff, 1.2);
-    sun.position.set(mapCenterX + 2000, 3000, mapCenterZ + 2000);
+    sun.position.set(mapCenterX + 2000, 3000, mapCenterZ - 2000);
     scene.add(sun);
     scene.add(new THREE.AmbientLight(0x666666));
 
-    // Build the initial optimized chunk
     buildTerrainChunk(startCol, startRow, initialDistance);
 
     raycaster = new THREE.Raycaster();
     centerScreen = new THREE.Vector2(0, 0);
 
-    // Reveal bottom sliders panel
+    // Reveal and configure bottom sliders
     document.getElementById('bottomSliders').style.display = 'block';
     
-    // Distance Slider Logic
+    // 1. Distance Slider Logic
     const distSlider = document.getElementById('viewDistance');
     distSlider.addEventListener('input', (e) => {
         document.getElementById('distVal').innerText = e.target.value;
@@ -99,11 +98,11 @@ function initThreeJS() {
         scene.fog.far = dist;
         
         const centerCol = Math.floor(camera.position.x / globalMeta.resolution);
-        const centerRow = Math.floor(Math.abs(camera.position.z) / globalMeta.resolution);
+        const centerRow = Math.floor(camera.position.z / globalMeta.resolution);
         buildTerrainChunk(centerCol, centerRow, dist);
     });
 
-    // Opacity Slider Logic
+    // 2. Opacity Slider Logic
     const opSlider = document.getElementById('opacitySlider');
     opSlider.addEventListener('input', (e) => {
         const op = parseFloat(e.target.value);
@@ -164,12 +163,11 @@ function buildTerrainChunk(centerCol, centerRow, distanceMeters) {
     geometry.computeVertexNormals();
     geometry.rotateX(-Math.PI / 2);
     
-    // Corrected Z-axis translation so geometry aligns perfectly with the raycaster
+    // FIX: Strictly positive coordinate alignment
     const chunkCenterX = startCol * globalMeta.resolution + (width / 2);
-    const chunkCenterZ = -(startRow * globalMeta.resolution) + (height / 2);
+    const chunkCenterZ = startRow * globalMeta.resolution + (height / 2);
     geometry.translate(chunkCenterX, 0, chunkCenterZ);
 
-    // Read current opacity from the new slider
     const currentOpacity = parseFloat(document.getElementById('opacitySlider').value);
     
     const material = new THREE.MeshStandardMaterial({
@@ -198,13 +196,14 @@ function updateRaycaster() {
     if (intersects.length > 0) {
         const hit = intersects[0];
         
+        // FIX: No more Math.abs() needed, correctly aligned.
         const col = Math.floor(hit.point.x / globalMeta.resolution);
-        const row = Math.floor(Math.abs(hit.point.z) / globalMeta.resolution);
+        const row = Math.floor(hit.point.z / globalMeta.resolution);
         const index = row * globalMeta.cols + col;
 
-        // Calculate exact HK1980 Coordinates
+        // Calculate exact real-world HK1980 Coordinates
         const easting = globalMeta.origin_x + hit.point.x;
-        const northing = globalMeta.origin_y - Math.abs(hit.point.z);
+        const northing = globalMeta.origin_y - hit.point.z;
 
         if (index >= 0 && index < globalLith.length) {
             const rockId = globalLith[index];
@@ -216,8 +215,6 @@ function updateRaycaster() {
                 `Elev: ~${Math.round(hit.point.y)} m<br>` +
                 `<span style="font-size: 0.85em; color: #ccc;">HK1980 Grid: E ${Math.round(easting)}, N ${Math.round(northing)}</span>`;
         }
-    } else {
-        // Keep the existing text if looking at the sky
     }
 }
 
