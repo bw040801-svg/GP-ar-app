@@ -4,32 +4,72 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Geoscientific AR Project</title>
+    <!-- Leaflet CSS for the Open-Source Map -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
     <style>
-        body { margin: 0; overflow: hidden; background-color: #000; touch-action: none; }
-        #cameraFeed { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; object-fit: cover; z-index: -1; }
+        body { margin: 0; overflow: hidden; background-color: #111; touch-action: none; font-family: Arial, sans-serif; }
+        
+        /* 1. Main Menu Screen */
+        #menuScreen {
+            position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: #111; display: flex; flex-direction: column;
+            justify-content: center; align-items: center; z-index: 200;
+        }
+        #menuScreen h1 { color: #fff; margin-bottom: 30px; text-align: center; font-size: 24px; padding: 0 20px;}
+        .menu-btn {
+            background-color: #007bff; color: white; border: none; border-radius: 8px;
+            padding: 15px 30px; font-size: 18px; font-weight: bold; margin: 10px;
+            width: 250px; cursor: pointer;
+        }
+
+        /* 2. Map Selection Screen */
+        #mapScreen {
+            position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+            display: none; z-index: 150;
+        }
+        #leafletMap { width: 100%; height: 100%; }
+        #confirmMapBtn {
+            position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%);
+            padding: 15px 30px; font-size: 18px; font-weight: bold;
+            background-color: #28a745; color: white; border: none; border-radius: 8px;
+            z-index: 1000; cursor: pointer; display: none;
+        }
+        #mapInstructions {
+            position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+            background: rgba(0,0,0,0.8); color: white; padding: 10px 20px;
+            border-radius: 20px; z-index: 1000; font-weight: bold;
+        }
+
+        /* 3. AR / 3D Scene Elements */
+        #cameraFeed { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; object-fit: cover; z-index: -1; display: none; }
         canvas { display: block; position: absolute; top: 0; left: 0; z-index: 1; }
         
         #ui { 
             position: absolute; top: 12px; left: 12px; color: #ffffff; 
-            font-family: Arial, sans-serif; background: rgba(0, 0, 0, 0.65);
-            padding: 10px 14px; border-radius: 6px; line-height: 1.5;
-            z-index: 10; max-width: 320px; pointer-events: none;
+            background: rgba(0, 0, 0, 0.65); padding: 10px 14px; border-radius: 6px; 
+            line-height: 1.5; z-index: 10; max-width: 280px; pointer-events: none;
+            display: none;
         }
         
-        /* New dedicated explanation box below the main UI */
         #explanationBox {
             position: absolute; top: 120px; left: 12px; color: #ffffff;
-            font-family: Arial, sans-serif; background: rgba(0, 0, 0, 0.8);
-            padding: 10px 14px; border-radius: 6px; line-height: 1.4;
-            z-index: 10; max-width: 320px; pointer-events: none;
-            font-size: 0.9em; border-left: 4px solid #007bff;
-            display: none; /* Hidden until a rock is targeted */
+            background: rgba(0, 0, 0, 0.8); padding: 10px 14px; border-radius: 6px; 
+            line-height: 1.4; z-index: 10; max-width: 280px; pointer-events: none;
+            font-size: 0.9em; border-left: 4px solid #007bff; display: none; 
+        }
+
+        /* Compass UI */
+        #compassBox {
+            position: absolute; top: 12px; right: 12px; color: #00ff00;
+            background: rgba(0, 0, 0, 0.65); padding: 10px 14px; border-radius: 6px;
+            font-weight: bold; font-size: 1.1em; z-index: 10; display: none;
         }
 
         #bottomSliders { 
             position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
             width: 70%; max-width: 600px; background: rgba(0, 0, 0, 0.65); 
-            padding: 15px; border-radius: 8px; color: white; font-family: Arial, sans-serif; 
+            padding: 15px; border-radius: 8px; color: white;
             z-index: 10; pointer-events: auto; display: none; box-sizing: border-box;
         }
         .slider-row { display: flex; flex-direction: column; margin-bottom: 15px; }
@@ -39,25 +79,35 @@
         #crosshair {
             position: absolute; top: 50%; left: 50%; width: 12px; height: 12px;
             margin: -6px 0 0 -6px; border: 2px solid #00ff00; border-radius: 50%;
-            z-index: 10; pointer-events: none;
-        }
-        
-        #startBtn {
-            position: absolute; bottom: 50%; left: 50%; transform: translate(-50%, 50%);
-            padding: 15px 30px; font-size: 18px; font-weight: bold;
-            background-color: #007bff; color: white; border: none; border-radius: 8px;
-            z-index: 20; cursor: pointer;
+            z-index: 10; pointer-events: none; display: none;
         }
     </style>
 </head>
 <body>
+    <!-- 1. Main Menu -->
+    <div id="menuScreen">
+        <h1>Hong Kong Geoscientific Explorer</h1>
+        <button class="menu-btn" id="btnLiveMode">Live AR Mode</button>
+        <button class="menu-btn" id="btnMapMode">Virtual Map Mode</button>
+    </div>
+
+    <!-- 2. Interactive Map Screen -->
+    <div id="mapScreen">
+        <div id="mapInstructions">Tap map to select spawn point</div>
+        <div id="leafletMap"></div>
+        <button id="confirmMapBtn">Spawn Here</button>
+    </div>
+
+    <!-- 3. Main 3D / AR UI -->
     <video id="cameraFeed" autoplay playsinline></video>
     
     <div id="ui">
-        <div id="infoText">Awaiting AR initialization...</div>
+        <div id="infoText">Awaiting initialization...</div>
         <div id="gpsText" style="font-size: 0.8em; color:#aaa; margin-top: 5px;">GPS: Waiting...</div>
     </div>
+    
     <div id="explanationBox"></div>
+    <div id="compassBox">N 0°</div>
     
     <div id="bottomSliders">
         <div class="slider-row">
@@ -71,14 +121,12 @@
     </div>
 
     <div id="crosshair"></div>
-    <button id="startBtn">Start AR Mode</button>
     
+    <!-- Scripts -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/DeviceOrientationControls.js"></script>
-    
-    <!-- Proj4js for projecting GPS WGS84 to HK1980 Grid -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
-    
     <script src="app.js"></script>
 </body>
 </html>

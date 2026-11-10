@@ -1,15 +1,23 @@
 let scene, camera, cameraGroup, renderer, controls;
-let terrainGroup = null; // Replaces single terrain mesh
+let terrainGroup = null;
 let raycaster, centerScreen;
 let globalMeta, globalDem, globalLith;
 let rockColors = {}; 
 let geoWatchId = null;
 
-// Camera Swipe Calibration Offsets
+// App Modes
+let currentMode = null; // 'live' or 'map'
+let mapInstance = null;
+let mapMarker = null;
+let selectedLat = 22.3193; 
+let selectedLon = 114.1694;
+
+// Camera Calibration
 let yawOffset = 0;
 let pitchOffset = 0;
 let isDragging = false;
 let previousTouch = { x: 0, y: 0 };
+let gpsSceneX = 0, gpsSceneZ = 0, gpsGroundElev = 20;
 
 const GEOLOGY_DICT = {
     "Cmp": "Carboniferous Mai Po Member: mainly metasiltstone, metasandstone; graphite-bearing",
@@ -135,7 +143,10 @@ const GEOLOGY_DICT = {
 
 proj4.defs("EPSG:2326","+proj=tmerc +lat_0=22.31213333333334 +lon_0=114.1785555555556 +k=1 +x_0=836694.05 +y_0=819069.8 +ellps=intl +towgs84=-162.619,-276.959,-161.764,0.067753,-2.24365,-1.15883,-1.09425 +units=m +no_defs");
 
-document.getElementById('startBtn').addEventListener('click', startAR);
+// MENU LISTENERS
+document.getElementById('btnLiveMode').addEventListener('click', startLiveMode);
+document.getElementById('btnMapMode').addEventListener('click', openMapMode);
+document.getElementById('confirmMapBtn').addEventListener('click', confirmMapLocation);
 
 function generateColors(dictionary) {
     rockColors[0] = new THREE.Color("white"); 
@@ -145,33 +156,71 @@ function generateColors(dictionary) {
     }
 }
 
-async function startAR() {
-    document.getElementById('startBtn').style.display = 'none';
+// ----------------- MAP MODE LOGIC -----------------
+function openMapMode() {
+    document.getElementById('menuScreen').style.display = 'none';
+    document.getElementById('mapScreen').style.display = 'block';
+    
+    if (!mapInstance) {
+        mapInstance = L.map('leafletMap').setView([22.35, 114.12], 11);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 18, attribution: '© OpenStreetMap'
+        }).addTo(mapInstance);
+
+        mapInstance.on('click', function(e) {
+            if (mapMarker) { mapInstance.removeLayer(mapMarker); }
+            mapMarker = L.marker(e.latlng).addTo(mapInstance);
+            selectedLat = e.latlng.lat;
+            selectedLon = e.latlng.lng;
+            document.getElementById('confirmMapBtn').style.display = 'block';
+        });
+    }
+    setTimeout(() => mapInstance.invalidateSize(), 200);
+}
+
+async function confirmMapLocation() {
+    currentMode = 'map';
+    document.getElementById('mapScreen').style.display = 'none';
+    
+    // Request gyro permission if needed, even for map mode
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        await DeviceOrientationEvent.requestPermission();
+    }
+    
+    showUIElements();
+    loadTerrainData();
+}
+
+// ----------------- LIVE AR MODE LOGIC -----------------
+async function startLiveMode() {
+    currentMode = 'live';
+    document.getElementById('menuScreen').style.display = 'none';
     
     if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-        try {
-            const permissionState = await DeviceMotionEvent.requestPermission();
-            if (permissionState !== 'granted') {
-                document.getElementById('infoText').innerText = "Sensor permission denied.";
-                return;
-            }
-        } catch (error) {
-            console.error(error);
-            document.getElementById('infoText').innerText = "Sensor request failed.";
-            return;
-        }
+        try { await DeviceMotionEvent.requestPermission(); } catch (e) { console.error(e); }
     }
 
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-        document.getElementById('cameraFeed').srcObject = stream;
+        const video = document.getElementById('cameraFeed');
+        video.srcObject = stream;
+        video.style.display = 'block';
     } catch (err) {
         console.error("Camera access denied", err);
     }
-
+    
+    showUIElements();
     loadTerrainData();
 }
 
+function showUIElements() {
+    document.getElementById('ui').style.display = 'block';
+    document.getElementById('bottomSliders').style.display = 'block';
+    document.getElementById('crosshair').style.display = 'block';
+    document.getElementById('compassBox').style.display = 'block';
+}
+
+// ----------------- 3D SCENE & DATA -----------------
 async function loadTerrainData() {
     document.getElementById('infoText').innerText = "Loading HK terrain...";
     const meta = await (await fetch('data/meta.json')).json();
@@ -185,13 +234,11 @@ async function loadTerrainData() {
 
 function initThreeJS() {
     scene = new THREE.Scene();
-    
     const initialDistance = parseInt(document.getElementById('viewDistance').value);
     scene.fog = new THREE.Fog(0x87CEEB, initialDistance * 0.5, initialDistance);
     
     camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, initialDistance);
     
-    // The cameraGroup is rotated by your finger swipes, while the camera inside it is rotated by your gyroscope
     cameraGroup = new THREE.Group();
     scene.add(cameraGroup);
     cameraGroup.add(camera);
@@ -211,8 +258,6 @@ function initThreeJS() {
     raycaster = new THREE.Raycaster();
     centerScreen = new THREE.Vector2(0, 0);
 
-    document.getElementById('bottomSliders').style.display = 'block';
-    
     const distSlider = document.getElementById('viewDistance');
     distSlider.addEventListener('input', (e) => {
         document.getElementById('distVal').innerText = e.target.value;
@@ -231,12 +276,11 @@ function initThreeJS() {
         const op = parseFloat(e.target.value);
         document.getElementById('opacityVal').innerText = op;
         if (terrainGroup && terrainGroup.children.length > 1) {
-            // Apply opacity only to the colored mesh, not the invisible shield
             terrainGroup.children[1].material.opacity = op;
         }
     });
 
-    // Invisible swipe controls over the video feed
+    // INVERTED & LESS SENSITIVE TOUCH CALIBRATION
     renderer.domElement.addEventListener('touchstart', (e) => {
         isDragging = true;
         previousTouch.x = e.touches[0].clientX;
@@ -249,10 +293,10 @@ function initThreeJS() {
             const deltaX = e.touches[0].clientX - previousTouch.x;
             const deltaY = e.touches[0].clientY - previousTouch.y;
             
-            yawOffset -= deltaX * 0.005;
-            pitchOffset -= deltaY * 0.005;
+            // Reduced to 0.002 for precision. Added '+' so swiping right drags terrain right (looks left).
+            yawOffset += deltaX * 0.002;
+            pitchOffset += deltaY * 0.002;
             
-            // Rotate the group holding the camera
             cameraGroup.rotation.set(pitchOffset, yawOffset, 0, 'YXZ');
             
             previousTouch.x = e.touches[0].clientX;
@@ -260,13 +304,37 @@ function initThreeJS() {
         }
     }, {passive: false});
 
-    renderer.domElement.addEventListener('touchend', () => {
-        isDragging = false;
-    });
-
+    renderer.domElement.addEventListener('touchend', () => { isDragging = false; });
     window.addEventListener('resize', onWindowResize);
-    startGPSWatcher(); 
+
+    if (currentMode === 'live') {
+        startGPSWatcher(); 
+    } else if (currentMode === 'map') {
+        setCameraToLocation(selectedLat, selectedLon);
+        document.getElementById('gpsText').innerText = "Mode: Virtual Map View";
+    }
+    
     animate();
+}
+
+function setCameraToLocation(lat, lon) {
+    const hk1980 = proj4("WGS84", "EPSG:2326", [lon, lat]);
+    gpsSceneX = hk1980[0] - globalMeta.origin_x;
+    gpsSceneZ = globalMeta.origin_y - hk1980[1];
+
+    const centerCol = Math.floor(gpsSceneX / globalMeta.resolution);
+    const centerRow = Math.floor(gpsSceneZ / globalMeta.resolution);
+    const index = centerRow * globalMeta.cols + centerCol;
+    
+    gpsGroundElev = 20; 
+    if (index >= 0 && index < globalDem.length) {
+        const dataElev = globalDem[index];
+        if (dataElev !== globalMeta.nodata) {
+            gpsGroundElev = dataElev;
+        }
+    }
+    cameraGroup.position.set(gpsSceneX, gpsGroundElev + 5, gpsSceneZ);
+    if (!terrainGroup) rebuildMeshFromCamera();
 }
 
 function startGPSWatcher() {
@@ -280,45 +348,18 @@ function startGPSWatcher() {
         let lat = position.coords.latitude;
         let lon = position.coords.longitude;
         
-        // Testing Spoof: Teleports to HK if detected in Germany
-        if (lat > 50) {
+        if (lat > 50) { // Spoof to Tai Mo Shan if testing in Europe
             lat = 22.411; 
             lon = 114.124;
             document.getElementById('gpsText').innerText = "GPS: Spoofed to HK (Tai Mo Shan)";
         } else {
             document.getElementById('gpsText').innerText = `GPS: Live (${position.coords.accuracy.toFixed(1)}m accuracy)`;
         }
-
-        const hk1980 = proj4("WGS84", "EPSG:2326", [lon, lat]);
-        const gpsSceneX = hk1980[0] - globalMeta.origin_x;
-        const gpsSceneZ = globalMeta.origin_y - hk1980[1];
-
-        const centerCol = Math.floor(gpsSceneX / globalMeta.resolution);
-        const centerRow = Math.floor(gpsSceneZ / globalMeta.resolution);
-        const index = centerRow * globalMeta.cols + centerCol;
-        
-        let gpsGroundElev = 20; 
-        if (index >= 0 && index < globalDem.length) {
-            const dataElev = globalDem[index];
-            if (dataElev !== globalMeta.nodata) {
-                gpsGroundElev = dataElev;
-            }
-        }
-        
-        // Move the Group (which carries the camera) to the physical GPS location
-        cameraGroup.position.set(gpsSceneX, gpsGroundElev + 5, gpsSceneZ);
-        
-        if (!terrainGroup) {
-            rebuildMeshFromCamera();
-        }
+        setCameraToLocation(lat, lon);
         
     }, (error) => {
-        console.error("GPS Error:", error);
         document.getElementById('gpsText').innerText = "GPS Signal Lost.";
-    }, {
-        enableHighAccuracy: true,
-        maximumAge: 0
-    });
+    }, { enableHighAccuracy: true, maximumAge: 0 });
 }
 
 function rebuildMeshFromCamera() {
@@ -338,7 +379,6 @@ function buildTerrainChunk(centerCol, centerRow, distanceMeters) {
     }
 
     const radiusCells = Math.ceil(distanceMeters / globalMeta.resolution);
-
     const startCol = Math.max(0, centerCol - radiusCells);
     const endCol = Math.min(globalMeta.cols - 1, centerCol + radiusCells);
     const startRow = Math.max(0, centerRow - radiusCells);
@@ -350,7 +390,6 @@ function buildTerrainChunk(centerCol, centerRow, distanceMeters) {
 
     const width = cols * globalMeta.resolution;
     const height = rows * globalMeta.resolution;
-
     const geometry = new THREE.PlaneGeometry(width, height, cols - 1, rows - 1);
     const vertices = geometry.attributes.position.array;
     const vertexColors = [];
@@ -360,13 +399,10 @@ function buildTerrainChunk(centerCol, centerRow, distanceMeters) {
         for (let c = startCol; c < endCol; c++) {
             const dataIdx = r * globalMeta.cols + c;
             const elev = globalDem[dataIdx];
-            
             vertices[vIdx * 3 + 2] = (elev !== globalMeta.nodata) ? elev : -500;
-            
             const rockId = globalLith[dataIdx];
             const color = rockColors[rockId] || rockColors[0];
             vertexColors.push(color.r, color.g, color.b);
-            
             vIdx++;
         }
     }
@@ -381,13 +417,10 @@ function buildTerrainChunk(centerCol, centerRow, distanceMeters) {
 
     const currentOpacity = parseFloat(document.getElementById('opacitySlider').value);
     
-    // TWO-PASS RENDER FIX
-    // Pass 1: Invisible shield that writes to the depth buffer
     const occluderMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: true });
     const occluderMesh = new THREE.Mesh(geometry, occluderMat);
     occluderMesh.renderOrder = 0;
 
-    // Pass 2: Transparent terrain painted on top (depthWrite is false, so it doesn't fight itself)
     const colorMat = new THREE.MeshStandardMaterial({
         vertexColors: true, roughness: 0.8, side: THREE.FrontSide,
         transparent: true, opacity: currentOpacity, depthWrite: false 
@@ -407,11 +440,29 @@ function onWindowResize() {
     renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
+function updateCompass() {
+    let dir = new THREE.Vector3();
+    camera.getWorldDirection(dir);
+    // Calculate heading (Z is mapped as South, so -Z is North)
+    let heading = Math.atan2(dir.x, -dir.z) * (180 / Math.PI);
+    if (heading < 0) heading += 360;
+    
+    let card = "N";
+    if (heading > 22.5 && heading <= 67.5) card = "NE";
+    else if (heading > 67.5 && heading <= 112.5) card = "E";
+    else if (heading > 112.5 && heading <= 157.5) card = "SE";
+    else if (heading > 157.5 && heading <= 202.5) card = "S";
+    else if (heading > 202.5 && heading <= 247.5) card = "SW";
+    else if (heading > 247.5 && heading <= 292.5) card = "W";
+    else if (heading > 292.5 && heading <= 337.5) card = "NW";
+    
+    document.getElementById('compassBox').innerText = `${Math.round(heading)}° ${card}`;
+}
+
 function updateRaycaster() {
     if (!terrainGroup || terrainGroup.children.length < 2) return;
     
     raycaster.setFromCamera(centerScreen, camera);
-    // Raycast only against the colored mesh, not the invisible shield
     const intersects = raycaster.intersectObject(terrainGroup.children[1]);
 
     if (intersects.length > 0) {
@@ -447,6 +498,7 @@ function updateRaycaster() {
 function animate() {
     requestAnimationFrame(animate);
     controls.update();     
+    updateCompass();       
     updateRaycaster();     
     renderer.render(scene, camera);
 }
