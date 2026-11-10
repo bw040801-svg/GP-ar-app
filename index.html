@@ -9,22 +9,34 @@
         #cameraFeed { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; object-fit: cover; z-index: -1; }
         canvas { display: block; position: absolute; top: 0; left: 0; z-index: 1; }
         
+        /* Top-left Info Panel */
         #ui { 
             position: absolute; top: 12px; left: 12px; color: #ffffff; 
             font-family: Arial, sans-serif; background: rgba(0, 0, 0, 0.65);
             padding: 10px 14px; border-radius: 6px; line-height: 1.5;
-            z-index: 10; max-width: 320px;
+            z-index: 10; max-width: 320px; pointer-events: none;
         }
-        #sliderContainer { margin-top: 10px; border-top: 1px solid #555; padding-top: 10px; pointer-events: auto; }
-        #viewDistance { width: 100%; }
+        
+        /* Bottom Center Sliders (70% width) */
+        #bottomSliders { 
+            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+            width: 70%; max-width: 600px;
+            background: rgba(0, 0, 0, 0.65); padding: 15px; border-radius: 8px;
+            color: white; font-family: Arial, sans-serif; z-index: 10; pointer-events: auto;
+            display: none; box-sizing: border-box;
+        }
+        .slider-row { display: flex; flex-direction: column; margin-bottom: 15px; }
+        .slider-row:last-child { margin-bottom: 0; }
+        .slider-row input { width: 100%; margin-top: 5px; }
         
         #crosshair {
             position: absolute; top: 50%; left: 50%; width: 12px; height: 12px;
             margin: -6px 0 0 -6px; border: 2px solid #00ff00; border-radius: 50%;
             z-index: 10; pointer-events: none;
         }
+        
         #startBtn {
-            position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
+            position: absolute; bottom: 50%; left: 50%; transform: translate(-50%, 50%);
             padding: 15px 30px; font-size: 18px; font-weight: bold;
             background-color: #007bff; color: white; border: none; border-radius: 8px;
             z-index: 20; cursor: pointer;
@@ -35,11 +47,19 @@
     <video id="cameraFeed" autoplay playsinline></video>
     <div id="ui">
         <div id="infoText">Awaiting AR initialization...</div>
-        <div id="sliderContainer" style="display:none;">
-            <label for="viewDistance">Render Distance: <span id="distVal">3000</span>m</label><br>
+    </div>
+    
+    <div id="bottomSliders">
+        <div class="slider-row">
+            <label for="viewDistance">Render Distance: <span id="distVal">3000</span>m</label>
             <input type="range" id="viewDistance" min="500" max="15000" step="500" value="3000">
         </div>
+        <div class="slider-row">
+            <label for="opacitySlider">Terrain Transparency: <span id="opacityVal">0.65</span></label>
+            <input type="range" id="opacitySlider" min="0" max="1" step="0.05" value="0.65">
+        </div>
     </div>
+
     <div id="crosshair"></div>
     <button id="startBtn">Start AR Mode</button>
     

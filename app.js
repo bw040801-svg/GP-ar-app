@@ -83,27 +83,34 @@ function initThreeJS() {
     raycaster = new THREE.Raycaster();
     centerScreen = new THREE.Vector2(0, 0);
 
-    // Setup slider
-    document.getElementById('sliderContainer').style.display = 'block';
-    const slider = document.getElementById('viewDistance');
+    // Reveal bottom sliders panel
+    document.getElementById('bottomSliders').style.display = 'block';
     
-    // Update text immediately while dragging
-    slider.addEventListener('input', (e) => {
+    // Distance Slider Logic
+    const distSlider = document.getElementById('viewDistance');
+    distSlider.addEventListener('input', (e) => {
         document.getElementById('distVal').innerText = e.target.value;
     });
-    
-    // Rebuild mesh ONLY when user stops dragging to prevent lag
-    slider.addEventListener('change', (e) => {
+    distSlider.addEventListener('change', (e) => {
         const dist = parseInt(e.target.value);
         camera.far = dist;
         camera.updateProjectionMatrix();
         scene.fog.near = dist * 0.5;
         scene.fog.far = dist;
         
-        // Rebuild mesh based on current camera position
         const centerCol = Math.floor(camera.position.x / globalMeta.resolution);
         const centerRow = Math.floor(Math.abs(camera.position.z) / globalMeta.resolution);
         buildTerrainChunk(centerCol, centerRow, dist);
+    });
+
+    // Opacity Slider Logic
+    const opSlider = document.getElementById('opacitySlider');
+    opSlider.addEventListener('input', (e) => {
+        const op = parseFloat(e.target.value);
+        document.getElementById('opacityVal').innerText = op;
+        if (terrain && terrain.material) {
+            terrain.material.opacity = op;
+        }
     });
 
     window.addEventListener('resize', onWindowResize);
@@ -157,14 +164,17 @@ function buildTerrainChunk(centerCol, centerRow, distanceMeters) {
     geometry.computeVertexNormals();
     geometry.rotateX(-Math.PI / 2);
     
-    // Shift this specific chunk so it sits at the exact real-world coordinates
+    // Corrected Z-axis translation so geometry aligns perfectly with the raycaster
     const chunkCenterX = startCol * globalMeta.resolution + (width / 2);
-    const chunkCenterZ = -(startRow * globalMeta.resolution + (height / 2));
+    const chunkCenterZ = -(startRow * globalMeta.resolution) + (height / 2);
     geometry.translate(chunkCenterX, 0, chunkCenterZ);
 
+    // Read current opacity from the new slider
+    const currentOpacity = parseFloat(document.getElementById('opacitySlider').value);
+    
     const material = new THREE.MeshStandardMaterial({
         vertexColors: true, roughness: 0.8, side: THREE.DoubleSide,
-        transparent: true, opacity: 0.65 
+        transparent: true, opacity: currentOpacity 
     });
 
     terrain = new THREE.Mesh(geometry, material);
@@ -188,10 +198,13 @@ function updateRaycaster() {
     if (intersects.length > 0) {
         const hit = intersects[0];
         
-        // Calculate grid index using world coordinates instead of UVs
         const col = Math.floor(hit.point.x / globalMeta.resolution);
         const row = Math.floor(Math.abs(hit.point.z) / globalMeta.resolution);
         const index = row * globalMeta.cols + col;
+
+        // Calculate exact HK1980 Coordinates
+        const easting = globalMeta.origin_x + hit.point.x;
+        const northing = globalMeta.origin_y - Math.abs(hit.point.z);
 
         if (index >= 0 && index < globalLith.length) {
             const rockId = globalLith[index];
@@ -200,7 +213,8 @@ function updateRaycaster() {
             document.getElementById('infoText').innerHTML = 
                 `<b>Target Locked:</b><br>` +
                 `<span style="color:#00ff00; font-weight:bold;">${rockName}</span><br>` +
-                `Elevation: ~${Math.round(hit.point.y)} m`;
+                `Elev: ~${Math.round(hit.point.y)} m<br>` +
+                `<span style="font-size: 0.85em; color: #ccc;">HK1980 Grid: E ${Math.round(easting)}, N ${Math.round(northing)}</span>`;
         }
     } else {
         // Keep the existing text if looking at the sky
