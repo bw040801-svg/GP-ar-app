@@ -62,8 +62,19 @@ function initThreeJS() {
     const startCol = Math.floor(globalMeta.cols / 2);
     const startRow = Math.floor(globalMeta.rows / 2);
     const mapCenterX = startCol * globalMeta.resolution;
-    const mapCenterZ = startRow * globalMeta.resolution; // Strictly positive Z-axis now
-    camera.position.set(mapCenterX, 1500, mapCenterZ); 
+    const mapCenterZ = startRow * globalMeta.resolution; 
+
+    // 1. Query the DEM array for the exact ground elevation at this starting column and row
+    const centerIndex = startRow * globalMeta.cols + startCol;
+    let groundElevation = globalDem[centerIndex];
+    
+    // 2. Fallback in case the exact center of the map happens to be ocean/NoData
+    if (groundElevation === globalMeta.nodata || groundElevation < -100) {
+        groundElevation = 20; 
+    }
+
+    // 3. Spawn the camera exactly 5 meters above the ground
+    camera.position.set(mapCenterX, groundElevation + 5, mapCenterZ);
 
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
