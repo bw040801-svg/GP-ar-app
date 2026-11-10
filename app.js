@@ -1,10 +1,16 @@
-let scene, camera, renderer, terrain, controls;
+let scene, camera, cameraGroup, renderer, controls;
+let terrainGroup = null; // Replaces single terrain mesh
 let raycaster, centerScreen;
 let globalMeta, globalDem, globalLith;
 let rockColors = {}; 
 let geoWatchId = null;
 
-// The dictionary you reviewed
+// Camera Swipe Calibration Offsets
+let yawOffset = 0;
+let pitchOffset = 0;
+let isDragging = false;
+let previousTouch = { x: 0, y: 0 };
+
 const GEOLOGY_DICT = {
     "Cmp": "Carboniferous Mai Po Member: mainly metasiltstone, metasandstone; graphite-bearing",
     "Cts": "Carboniferous Tai Shek Mo Member: mainly metasandstone with metaconglomerate and phyllite",
@@ -127,7 +133,6 @@ const GEOLOGY_DICT = {
     "F": "Reclamation and Fill Bodies"
 };
 
-// Define HK1980 Projection for GPS Math
 proj4.defs("EPSG:2326","+proj=tmerc +lat_0=22.31213333333334 +lon_0=114.1785555555556 +k=1 +x_0=836694.05 +y_0=819069.8 +ellps=intl +towgs84=-162.619,-276.959,-161.764,0.067753,-2.24365,-1.15883,-1.09425 +units=m +no_defs");
 
 document.getElementById('startBtn').addEventListener('click', startAR);
@@ -183,8 +188,14 @@ function initThreeJS() {
     
     const initialDistance = parseInt(document.getElementById('viewDistance').value);
     scene.fog = new THREE.Fog(0x87CEEB, initialDistance * 0.5, initialDistance);
+    
     camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, initialDistance);
     
+    // The cameraGroup is rotated by your finger swipes, while the camera inside it is rotated by your gyroscope
+    cameraGroup = new THREE.Group();
+    scene.add(cameraGroup);
+    cameraGroup.add(camera);
+
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(window.devicePixelRatio);
@@ -193,7 +204,7 @@ function initThreeJS() {
     controls = new THREE.DeviceOrientationControls(camera);
 
     const sun = new THREE.DirectionalLight(0xffffff, 1.2);
-    sun.position.set(0, 3000, 0); // Will update to follow camera
+    sun.position.set(0, 3000, 0); 
     scene.add(sun);
     scene.add(new THREE.AmbientLight(0x666666));
 
@@ -219,13 +230,42 @@ function initThreeJS() {
     opSlider.addEventListener('input', (e) => {
         const op = parseFloat(e.target.value);
         document.getElementById('opacityVal').innerText = op;
-        if (terrain && terrain.material) {
-            terrain.material.opacity = op;
+        if (terrainGroup && terrainGroup.children.length > 1) {
+            // Apply opacity only to the colored mesh, not the invisible shield
+            terrainGroup.children[1].material.opacity = op;
         }
     });
 
+    // Invisible swipe controls over the video feed
+    renderer.domElement.addEventListener('touchstart', (e) => {
+        isDragging = true;
+        previousTouch.x = e.touches[0].clientX;
+        previousTouch.y = e.touches[0].clientY;
+    }, {passive: false});
+
+    renderer.domElement.addEventListener('touchmove', (e) => {
+        if (isDragging) {
+            e.preventDefault();
+            const deltaX = e.touches[0].clientX - previousTouch.x;
+            const deltaY = e.touches[0].clientY - previousTouch.y;
+            
+            yawOffset -= deltaX * 0.005;
+            pitchOffset -= deltaY * 0.005;
+            
+            // Rotate the group holding the camera
+            cameraGroup.rotation.set(pitchOffset, yawOffset, 0, 'YXZ');
+            
+            previousTouch.x = e.touches[0].clientX;
+            previousTouch.y = e.touches[0].clientY;
+        }
+    }, {passive: false});
+
+    renderer.domElement.addEventListener('touchend', () => {
+        isDragging = false;
+    });
+
     window.addEventListener('resize', onWindowResize);
-    startGPSWatcher(); // Starts the GPS feed
+    startGPSWatcher(); 
     animate();
 }
 
@@ -234,14 +274,13 @@ function startGPSWatcher() {
         document.getElementById('gpsText').innerText = "GPS not supported on this device.";
         return;
     }
-    
     document.getElementById('gpsText').innerText = "Acquiring GPS signal...";
     
     geoWatchId = navigator.geolocation.watchPosition((position) => {
         let lat = position.coords.latitude;
         let lon = position.coords.longitude;
         
-        // BREMEN SPOOF: If you test this from Germany, it teleports you to Tai Mo Shan!
+        // Testing Spoof: Teleports to HK if detected in Germany
         if (lat > 50) {
             lat = 22.411; 
             lon = 114.124;
@@ -250,33 +289,26 @@ function startGPSWatcher() {
             document.getElementById('gpsText').innerText = `GPS: Live (${position.coords.accuracy.toFixed(1)}m accuracy)`;
         }
 
-        // Project WGS84 to HK1980 Grid
         const hk1980 = proj4("WGS84", "EPSG:2326", [lon, lat]);
-        const easting = hk1980[0];
-        const northing = hk1980[1];
+        const gpsSceneX = hk1980[0] - globalMeta.origin_x;
+        const gpsSceneZ = globalMeta.origin_y - hk1980[1];
 
-        // Map HK1980 to local ThreeJS scene coordinates
-        const sceneX = easting - globalMeta.origin_x;
-        const sceneZ = globalMeta.origin_y - northing;
-
-        // Find terrain elevation to put camera 2 meters above ground level
-        const centerCol = Math.floor(sceneX / globalMeta.resolution);
-        const centerRow = Math.floor(sceneZ / globalMeta.resolution);
+        const centerCol = Math.floor(gpsSceneX / globalMeta.resolution);
+        const centerRow = Math.floor(gpsSceneZ / globalMeta.resolution);
         const index = centerRow * globalMeta.cols + centerCol;
         
-        let groundElev = 20; // Default fallback
+        let gpsGroundElev = 20; 
         if (index >= 0 && index < globalDem.length) {
             const dataElev = globalDem[index];
             if (dataElev !== globalMeta.nodata) {
-                groundElev = dataElev;
+                gpsGroundElev = dataElev;
             }
         }
         
-        // Move camera
-        camera.position.set(sceneX, groundElev + 2, sceneZ);
+        // Move the Group (which carries the camera) to the physical GPS location
+        cameraGroup.position.set(gpsSceneX, gpsGroundElev + 5, gpsSceneZ);
         
-        // If terrain hasn't been built yet, build it now at this location
-        if (!terrain) {
+        if (!terrainGroup) {
             rebuildMeshFromCamera();
         }
         
@@ -291,16 +323,18 @@ function startGPSWatcher() {
 
 function rebuildMeshFromCamera() {
     const dist = parseInt(document.getElementById('viewDistance').value);
-    const centerCol = Math.floor(camera.position.x / globalMeta.resolution);
-    const centerRow = Math.floor(camera.position.z / globalMeta.resolution);
+    const centerCol = Math.floor(cameraGroup.position.x / globalMeta.resolution);
+    const centerRow = Math.floor(cameraGroup.position.z / globalMeta.resolution);
     buildTerrainChunk(centerCol, centerRow, dist);
 }
 
 function buildTerrainChunk(centerCol, centerRow, distanceMeters) {
-    if (terrain) {
-        scene.remove(terrain);
-        terrain.geometry.dispose();
-        terrain.material.dispose();
+    if (terrainGroup) {
+        scene.remove(terrainGroup);
+        terrainGroup.children.forEach(child => {
+            child.geometry.dispose();
+            child.material.dispose();
+        });
     }
 
     const radiusCells = Math.ceil(distanceMeters / globalMeta.resolution);
@@ -347,14 +381,24 @@ function buildTerrainChunk(centerCol, centerRow, distanceMeters) {
 
     const currentOpacity = parseFloat(document.getElementById('opacitySlider').value);
     
-    // FIX FOR X-RAY MOUNTAINS: FrontSide and depthWrite: true forces self-occlusion
-    const material = new THREE.MeshStandardMaterial({
-        vertexColors: true, roughness: 0.8, side: THREE.FrontSide,
-        transparent: true, opacity: currentOpacity, depthWrite: true 
-    });
+    // TWO-PASS RENDER FIX
+    // Pass 1: Invisible shield that writes to the depth buffer
+    const occluderMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: true });
+    const occluderMesh = new THREE.Mesh(geometry, occluderMat);
+    occluderMesh.renderOrder = 0;
 
-    terrain = new THREE.Mesh(geometry, material);
-    scene.add(terrain);
+    // Pass 2: Transparent terrain painted on top (depthWrite is false, so it doesn't fight itself)
+    const colorMat = new THREE.MeshStandardMaterial({
+        vertexColors: true, roughness: 0.8, side: THREE.FrontSide,
+        transparent: true, opacity: currentOpacity, depthWrite: false 
+    });
+    const colorMesh = new THREE.Mesh(geometry, colorMat);
+    colorMesh.renderOrder = 1;
+
+    terrainGroup = new THREE.Group();
+    terrainGroup.add(occluderMesh);
+    terrainGroup.add(colorMesh);
+    scene.add(terrainGroup);
 }
 
 function onWindowResize() {
@@ -364,10 +408,11 @@ function onWindowResize() {
 }
 
 function updateRaycaster() {
-    if (!terrain) return;
+    if (!terrainGroup || terrainGroup.children.length < 2) return;
     
     raycaster.setFromCamera(centerScreen, camera);
-    const intersects = raycaster.intersectObject(terrain);
+    // Raycast only against the colored mesh, not the invisible shield
+    const intersects = raycaster.intersectObject(terrainGroup.children[1]);
 
     if (intersects.length > 0) {
         const hit = intersects[0];
@@ -385,17 +430,17 @@ function updateRaycaster() {
             
             document.getElementById('infoText').innerHTML = 
                 `<b>Target Locked:</b><br>` +
-                `<span style="color:#00ff00; font-weight:bold;">${rockCode}</span><br>` +
+                `<span style="color:#00ff00; font-weight:bold;">Code: ${rockCode}</span><br>` +
                 `Elev: ~${Math.round(hit.point.y)} m<br>` +
-                `<span style="font-size: 0.85em; color: #ccc;">HK1980 Grid: E ${Math.round(easting)}, N ${Math.round(northing)}</span>`;
+                `<span style="font-size: 0.85em; color: #ccc;">HK1980: E ${Math.round(easting)}, N ${Math.round(northing)}</span>`;
                 
-            // Update the separate explanation box
             const expBox = document.getElementById('explanationBox');
             expBox.style.display = 'block';
-            expBox.innerHTML = rockDesc;
+            expBox.innerHTML = rockDesc; 
         }
     } else {
         document.getElementById('explanationBox').style.display = 'none';
+        document.getElementById('infoText').innerHTML = "Aim at terrain...";
     }
 }
 
